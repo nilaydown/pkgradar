@@ -1,0 +1,35 @@
+{
+  "name": "pkgradar",
+  "version": "0.1.0",
+  "description": "Content-based supply-chain scanner for npm/pnpm/yarn/bun: inspects the bytes you actually installed (lifecycle hooks, obfuscated payloads, worm IOCs) instead of just matching package names against an advisory list.",
+  "bin": {
+    "pkgradar": "bin/pkgradar.js"
+  },
+  "type": "commonjs",
+  "files": [
+    "bin/",
+    "lib/",
+    "data/",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "test": "node test/smoke.js"
+  },
+  "keywords": [
+    "supply-chain",
+    "security",
+    "npm",
+    "pnpm",
+    "yarn",
+    "bun",
+    "malware",
+    "shai-hulud",
+    "audit",
+    "scanner"
+  ],
+  "license": "MIT",
+  "dependencies": {}
+}

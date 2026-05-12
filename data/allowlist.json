@@ -1,0 +1,16 @@
+{
+  "_comment": "Packages whose own first-party code is widely audited and known to trip the heuristics for benign reasons (bundled CLIs that read env tokens + hit the network, funding-message postinstalls, etc.). Findings on these are downgraded to INFO with a note. Match is by exact package name or by '@scope/' prefix entries ending in '/*'. Keep this list conservative — it is the one place a real compromise could hide, so entries should be famous, high-visibility packages only.",
+  "names": [
+    "core-js", "core-js-pure", "core-js-compat",
+    "esbuild", "@esbuild/*",
+    "vercel", "@vercel/*", "create-next-app", "next", "@next/*",
+    "corepack", "npm", "@npmcli/*", "pnpm", "yarn",
+    "d3", "d3-array", "d3-scale", "@edge-runtime/*",
+    "webpack", "rollup", "vite", "turbo", "@turbo/*",
+    "typescript", "ts-node", "tsx",
+    "playwright", "playwright-core", "@playwright/*", "puppeteer", "puppeteer-core",
+    "sharp", "@img/*",
+    "@sentry/*", "@clerk/*", "firebase", "@firebase/*", "aws-sdk", "@aws-sdk/*",
+    "node-gyp", "prebuild-install", "node-pre-gyp", "@mapbox/node-pre-gyp"
+  ]
+}
