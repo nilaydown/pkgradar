@@ -15,6 +15,15 @@
   "engines": {
     "node": ">=18"
   },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/nilaydown/pkgradar.git"
+  },
+  "homepage": "https://github.com/nilaydown/pkgradar#readme",
+  "bugs": {
+    "url": "https://github.com/nilaydown/pkgradar/issues"
+  },
+  "author": "nilaydown",
   "scripts": {
     "test": "node test/smoke.js"
   },

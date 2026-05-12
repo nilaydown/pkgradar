@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 'use strict';
+const os = require('os');
 const { scan, SEV } = require('../lib/scan');
 
 const args = process.argv.slice(2);
@@ -7,10 +8,11 @@ const has = (f) => args.includes(f);
 const val = (f, d) => { const i = args.indexOf(f); return i >= 0 && args[i + 1] ? args[i + 1] : d; };
 
 if (has('-h') || has('--help')) {
-  console.log(`pkgradar — content-based supply-chain scanner for npm/pnpm/yarn/bun
+  console.log(`pkgradar  -  content-based supply-chain scanner for npm / pnpm / yarn / bun
 
-Looks at the bytes you actually installed (install hooks, obfuscated payloads,
-known worm artifacts) instead of just matching package names against a list.
+It opens the package files you actually installed and looks for what malware
+does (install hooks, obfuscated payloads, known worm artifacts), instead of
+just matching package names against an advisory list.
 
 USAGE
   npx pkgradar [options]
@@ -18,32 +20,48 @@ USAGE
 OPTIONS
   --online            also cross-reference OSV.dev for known advisories (network)
   --json              machine-readable output
-  --min-sev LEVEL     report findings >= LEVEL (critical|high|medium|low|info)  [default: medium]
+  --min-sev LEVEL     report findings at or above LEVEL
+                      critical | high | medium | low | info        [default: medium]
   --stores LIST       comma list to limit which stores are scanned
-                      (project,pnpm-project,npm-global,npx-cache,bun-cache,yarn-cache,yarn-berry)
-  --no-allowlist      don't downgrade findings on well-known packages (data/allowlist.json)
-  --max-depth N       max node_modules nesting depth                            [default: 12]
-  --cwd DIR           project directory to scan                                 [default: .]
+                      project, pnpm-project, npm-global, npx-cache,
+                      bun-cache, yarn-cache, yarn-berry
+  --no-allowlist      do not downgrade findings on well-known packages
+  --max-depth N       max node_modules nesting depth                [default: 12]
+  --cwd DIR           project directory to scan                     [default: .]
   -h, --help
 
 EXIT CODES
-  0  clean      1  findings at or above --min-sev      2  scanner error
+  0  clean       1  findings at or above --min-sev       2  scanner error
 `);
   process.exit(0);
 }
 
 const SEV_FROM_NAME = { critical: SEV.CRITICAL, high: SEV.HIGH, medium: SEV.MEDIUM, low: SEV.LOW, info: SEV.INFO };
-const minSev = SEV_FROM_NAME[(val('--min-sev', 'medium') || '').toLowerCase()] ?? SEV.MEDIUM;
+const minSevName = (val('--min-sev', 'medium') || 'medium').toLowerCase();
+const minSev = SEV_FROM_NAME[minSevName] ?? SEV.MEDIUM;
 
-const C = process.stdout.isTTY ? {
-  red: (s) => `\x1b[31m${s}\x1b[0m`, ylw: (s) => `\x1b[33m${s}\x1b[0m`, grn: (s) => `\x1b[32m${s}\x1b[0m`,
-  dim: (s) => `\x1b[2m${s}\x1b[0m`, bold: (s) => `\x1b[1m${s}\x1b[0m`, cyan: (s) => `\x1b[36m${s}\x1b[0m`,
-} : new Proxy({}, { get: () => (s) => s });
+const useColor = process.stdout.isTTY && !process.env.NO_COLOR;
+const e = (code) => useColor ? `\x1b[${code}m` : '';
+const wrap = (code) => (s) => useColor ? `\x1b[${code}m${s}\x1b[0m` : `${s}`;
+const C = {
+  bold: wrap('1'), dim: wrap('2'), red: wrap('31'), grn: wrap('32'), ylw: wrap('33'),
+  blu: wrap('34'), mag: wrap('35'), cyan: wrap('36'), gray: wrap('90'),
+};
+// severity badge: white text on a coloured background, padded
+const badge = (sev) => {
+  const bg = { CRITICAL: '41', HIGH: '45', MEDIUM: '43', LOW: '100', INFO: '100' }[sev] || '100';
+  const fg = sev === 'MEDIUM' ? '30' : '97';
+  const label = ` ${sev} `.padEnd(10);
+  return useColor ? `\x1b[${bg};${fg};1m${label}\x1b[0m` : `[${sev}]`.padEnd(10);
+};
+const SEV_TEXT = { CRITICAL: C.red, HIGH: C.mag, MEDIUM: C.ylw, LOW: C.gray, INFO: C.gray };
+const homeShort = (p) => (p && p.startsWith(os.homedir())) ? '~' + p.slice(os.homedir().length) : p;
 
-const SEV_COLOR = { CRITICAL: C.red, HIGH: C.red, MEDIUM: C.ylw, LOW: C.dim, INFO: C.dim };
+function rule(ch = '─', n = 64) { return C.gray(ch.repeat(n)); }
 
 (async () => {
   let res;
+  const started = Date.now();
   try {
     res = await scan({
       cwd: val('--cwd', process.cwd()),
@@ -53,48 +71,88 @@ const SEV_COLOR = { CRITICAL: C.red, HIGH: C.red, MEDIUM: C.ylw, LOW: C.dim, INF
       stores: (val('--stores', '') || '').split(',').map((s) => s.trim()).filter(Boolean),
       noAllowlist: has('--no-allowlist'),
     });
-  } catch (e) {
-    console.error(C.red('pkgradar: ') + (e && e.stack || e));
+  } catch (err) {
+    console.error(C.red('pkgradar error: ') + (err && err.stack || err));
     process.exit(2);
   }
+  const secs = ((Date.now() - started) / 1000).toFixed(1);
 
   if (has('--json')) {
-    console.log(JSON.stringify(res, null, 2));
+    console.log(JSON.stringify({ ...res, durationSeconds: Number(secs) }, null, 2));
     process.exit(res.findings.some((f) => f.sevNum >= minSev) ? 1 : 0);
   }
 
-  console.log(C.bold('\npkgradar') + C.dim(`  —  scanning ${res.cwd}`));
-  console.log(C.dim('stores scanned:'));
-  for (const s of res.stores) console.log(C.dim(`  • ${s.kind.padEnd(14)} ${String(s.packages).padStart(5)} pkgs  ${s.root}`));
-  console.log(C.dim(`  ${res.totalPackages} unique package@version pairs, ${res.totalScanned} package locations inspected\n`));
+  const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0 };
+  for (const f of res.findings) counts[f.severity]++;
+  const localFindings = res.findings.filter((f) => f.code !== 'osv-advisory');
+  const osvFindings = res.findings.filter((f) => f.code === 'osv-advisory');
+  const hits = res.findings.length;
+  const worst = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'].find((k) => counts[k]) || null;
 
-  if (res.osv && res.osv.error) console.log(C.ylw(`  OSV lookup skipped: ${res.osv.error}\n`));
+  // ---- header ----
+  console.log('');
+  console.log(`  ${C.bold('pkgradar')} ${C.gray('v' + require('../package.json').version)}   ${C.gray('content-based supply-chain scan')}`);
+  console.log(`  ${C.gray('project')} ${homeShort(res.cwd)}   ${C.gray(res.stores.length + ' stores, ' + secs + 's')}`);
+  console.log('');
 
-  if (!res.findings.length) {
-    console.log(C.grn('✓ no findings at or above ' + Object.keys(SEV_FROM_NAME).find((k) => SEV_FROM_NAME[k] === minSev)));
-    console.log(C.dim("  (this checks installed bytes; it can't prove a package is safe — just that nothing tripped the heuristics)\n"));
+  // ---- stores table ----
+  const nameW = Math.max(...res.stores.map((s) => s.kind.length), 6);
+  for (const s of res.stores) {
+    console.log(`  ${C.cyan(s.kind.padEnd(nameW))}  ${C.dim(String(s.packages).padStart(5) + ' pkgs')}  ${C.gray(homeShort(s.root))}`);
+  }
+  console.log(`  ${C.gray('total:')} ${C.bold(res.totalPackages)} ${C.gray('unique package@version,')} ${C.bold(res.totalScanned)} ${C.gray('locations inspected')}`);
+  if (res.osv && res.osv.error) console.log(`  ${C.ylw('OSV lookup failed:')} ${C.dim(res.osv.error)}`);
+  if (!res.osv && !has('--online')) console.log(`  ${C.gray('tip: add')} ${C.dim('--online')} ${C.gray('to also cross-check known advisories on OSV.dev')}`);
+  console.log('');
+
+  // ---- verdict line ----
+  if (!hits) {
+    console.log(`  ${C.grn('●')} ${C.bold('Verdict:')} ${C.grn('clean')} ${C.gray('- nothing tripped the heuristics at')} ${C.dim(minSevName)} ${C.gray('and above')}`);
+    console.log(`  ${C.gray('  (this inspects installed bytes; a clean run is not a proof of safety)')}`);
+    console.log('');
     process.exit(0);
   }
-
-  const counts = {};
-  for (const f of res.findings) counts[f.severity] = (counts[f.severity] || 0) + 1;
-  const summary = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'].filter((k) => counts[k]).map((k) => SEV_COLOR[k](`${counts[k]} ${k}`)).join('  ');
-  console.log(C.bold(`Findings: `) + summary + '\n');
-
-  for (const f of res.findings) {
-    const tag = SEV_COLOR[f.severity](`[${f.severity}]`);
-    console.log(`${tag} ${C.bold(f.package + '@' + f.version)} ${C.dim('(' + f.store + ')')}  ${C.cyan(f.code)}`);
-    console.log(`   ${f.message}`);
-    if (f.evidence) console.log(C.dim(`   ↳ ${f.evidence}`));
-    if (f.note) console.log(C.dim(`   note: ${f.note}`));
-    if (f.dir) console.log(C.dim(`   ${f.dir}`));
-    console.log();
+  const summaryBits = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'].filter((k) => counts[k]).map((k) => SEV_TEXT[k](`${counts[k]} ${k.toLowerCase()}`));
+  const dot = worst === 'CRITICAL' || worst === 'HIGH' ? C.red('●') : worst === 'MEDIUM' ? C.ylw('●') : C.gray('●');
+  console.log(`  ${dot} ${C.bold('Verdict:')} ${C.bold(hits + (hits === 1 ? ' finding' : ' findings'))}  ${C.gray('(')}${summaryBits.join(C.gray(', '))}${C.gray(')')}`);
+  if (localFindings.length && osvFindings.length) {
+    console.log(`  ${C.gray('  ' + localFindings.length + ' from inspecting installed code, ' + osvFindings.length + ' known advisories (OSV.dev)')}`);
   }
+  console.log('');
 
-  console.log(C.dim('Next steps:'));
-  console.log(C.dim('  • CRITICAL/HIGH: do not run install scripts; remove the package, clear caches, and rotate any npm/GitHub/cloud tokens this machine has held.'));
-  console.log(C.dim('  • Verify suspicious versions against the registry: `npm view <pkg> versions` and check publish dates / provenance.'));
-  console.log(C.dim('  • Re-run with --online to cross-check OSV.dev advisories.\n'));
+  // ---- findings, grouped by severity, local first then OSV ----
+  const ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
+  const printGroup = (title, list) => {
+    if (!list.length) return;
+    console.log(`  ${rule()}`);
+    console.log(`  ${C.bold(title)}`);
+    console.log('');
+    list.sort((a, b) => b.sevNum - a.sevNum || a.package.localeCompare(b.package));
+    for (const f of list) {
+      console.log(`  ${badge(f.severity)} ${C.bold(f.package + '@' + f.version)}  ${C.gray(f.store)}  ${C.cyan(f.code)}`);
+      console.log(`     ${f.message}`);
+      if (f.evidence) console.log(`     ${C.gray('→ ' + f.evidence)}`);
+      if (f.note) console.log(`     ${C.gray('note: ' + f.note)}`);
+      if (f.dir) console.log(`     ${C.gray(homeShort(f.dir))}`);
+      console.log('');
+    }
+  };
+  printGroup('From inspecting installed code', localFindings);
+  printGroup('Known advisories (OSV.dev)', osvFindings);
+
+  // ---- next steps ----
+  console.log(`  ${rule()}`);
+  console.log(`  ${C.bold('What to do')}`);
+  if (counts.CRITICAL || counts.HIGH) {
+    console.log(`  ${C.red('•')} Treat ${C.bold('CRITICAL / HIGH "installed code" findings')} as suspect: do not run install`);
+    console.log(`    scripts, remove the package, clear the relevant cache, and rotate any npm /`);
+    console.log(`    GitHub / cloud tokens this machine has held.`);
+  }
+  console.log(`  ${C.gray('•')} Check a flagged version against the registry: ${C.dim('npm view <pkg> versions')} ${C.gray('and look at')}`);
+  console.log(`    ${C.gray('publish dates and provenance.')}`);
+  if (osvFindings.length) console.log(`  ${C.gray('•')} OSV findings are the usual "known CVE in a dependency" set: ${C.dim('npm audit fix')} ${C.gray('/ bump.')}`);
+  if (!has('--online')) console.log(`  ${C.gray('•')} Re-run with ${C.dim('--online')} ${C.gray('to add OSV.dev advisory matching by exact version.')}`);
+  console.log('');
 
   process.exit(res.findings.some((f) => f.sevNum >= minSev) ? 1 : 0);
 })();
