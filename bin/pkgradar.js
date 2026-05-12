@@ -37,7 +37,7 @@ USAGE
 OPTIONS
   --online            also cross-reference OSV.dev for known advisories (network)
   --json              machine-readable output
-  --full              expanded per-finding output instead of the summary table
+  --compact           one terse line per finding instead of full blocks
   --min-sev LEVEL     report findings at or above LEVEL
                       critical | high | medium | low | info        [default: medium]
   --stores LIST       comma list to limit which stores are scanned
@@ -76,19 +76,6 @@ const C = {
   blu: paint('34'), mag: paint('35'), cyan: paint('36'), gray: paint('90'),
 };
 
-/**
- * Returns a fixed-width, coloured severity cell string for use inside a table.
- * Uses white-on-colour background in TTY mode.
- * @param {string} sev   - Severity name: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO".
- * @param {number} width - Total cell width in characters.
- * @returns {string}
- */
-function sevCell(sev, width) {
-  const bg = { CRITICAL: '41', HIGH: '45', MEDIUM: '43', LOW: '100', INFO: '100' }[sev] || '100';
-  const fg = sev === 'MEDIUM' ? '30' : '97';
-  const label = sev.padStart((width + sev.length) >> 1).padEnd(width);
-  return COLOR ? `\x1b[${bg};${fg};1m${label}\x1b[0m` : label;
-}
 
 /** Maps severity name to a colouring function for plain-text severity mentions. */
 const SEV_TEXT = { CRITICAL: C.red, HIGH: C.mag, MEDIUM: C.ylw, LOW: C.gray, INFO: C.gray };
@@ -169,6 +156,41 @@ function table(cols, rows) {
   return out.join('\n');
 }
 
+/**
+ * Word-wrap a plain string to a column width, returning an array of lines.
+ * Tokens longer than the width are hard-split so nothing overflows.
+ * @param {string} text  - Text to wrap (no ANSI codes).
+ * @param {number} width - Max characters per line.
+ * @returns {string[]}
+ */
+function wrap(text, width) {
+  const words = String(text || '').split(/\s+/).filter(Boolean);
+  const lines = [];
+  let cur = '';
+  for (let w of words) {
+    while (w.length > width) { if (cur) { lines.push(cur); cur = ''; } lines.push(w.slice(0, width)); w = w.slice(width); }
+    if (!cur) cur = w;
+    else if (cur.length + 1 + w.length <= width) cur += ' ' + w;
+    else { lines.push(cur); cur = w; }
+  }
+  if (cur) lines.push(cur);
+  return lines.length ? lines : [''];
+}
+
+/** One-line plain-language explanation of why each finding type matters. */
+const WHY = {
+  'lifecycle-hook': 'install hooks run automatically on npm/yarn/pnpm install; this one does something a normal build step would not',
+  'worm-ioc-file': 'this filename is a known artifact of the Shai-Hulud worm family',
+  'suspicious-js': 'code that decodes and then executes a payload, or hard-coded worm exfiltration constants',
+  'embedded-gh-workflow': 'harmless on its own; just noting the package ships a CI workflow file',
+  'malicious-gh-workflow': 'a bundled GitHub Actions workflow that pipes a remote script straight into a shell',
+  'odd-bin': 'a bin entry pointing outside the package or at a shell script is unusual for a dependency',
+  'osv-advisory': 'a publicly known vulnerability affects this exact version; check whether a patched release exists',
+};
+
+/** ●-marker colour by severity, used at the start of each finding block. */
+const SEV_DOT = { CRITICAL: C.red('●'), HIGH: C.mag('●'), MEDIUM: C.ylw('●'), LOW: C.gray('●'), INFO: C.gray('○') };
+
 // ----------------------------------------------------------------------------
 // main
 // ----------------------------------------------------------------------------
@@ -242,41 +264,41 @@ function table(cols, rows) {
   p('');
 
   // ---- findings ----
+  // Grouped by severity, one readable block per finding. A fixed-width table would
+  // truncate the detail text, so we wrap it to the terminal instead.
   const sorted = res.findings.slice().sort((a, b) => b.sevNum - a.sevNum || a.code.localeCompare(b.code) || a.package.localeCompare(b.package));
+  const term = Math.max(60, Math.min(process.stdout.columns || 100, 120));
+  const ORDER = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'];
 
-  if (has('--full')) {
+  if (has('--compact')) {
+    // one terse line per finding
+    const pkgW = Math.min(34, Math.max(...sorted.map((f) => (f.package + '@' + f.version).length)));
     for (const f of sorted) {
-      p(`  ${sevCell(f.severity, 10)} ${C.bold(f.package + '@' + f.version)}  ${C.gray(f.store)}  ${C.cyan(f.code)}`);
-      p(`     ${f.message}`);
-      if (f.evidence) p(`     ${C.gray('-> ' + f.evidence)}`);
-      if (f.note) p(`     ${C.gray('note: ' + f.note)}`);
-      if (f.dir) p(`     ${C.gray(homeShort(f.dir))}`);
-      p('');
+      p(`  ${SEV_DOT[f.severity]} ${SEV_TEXT[f.severity](f.severity.padEnd(8))} ${C.bold(padTo(clip(f.package + '@' + f.version, pkgW), pkgW))}  ${C.cyan(padTo(f.code, 21))} ${C.gray(clip(f.evidence || f.message, term - pkgW - 36))}`);
     }
   } else {
-    const term = process.stdout.columns || 120;
-    const W_PKG = 28, W_TYPE = 21, W_WHERE = 16;
-    const W_DETAIL = Math.max(24, term - (2 + 3 + 10 + W_PKG + W_TYPE + W_WHERE + 3 * 5 + 1));
-    const SHOW = 60;
-    const rows = sorted.slice(0, SHOW).map((f) => ({
-      sev: sevCell(f.severity, 10),
-      pkg: f.package + '@' + f.version,
-      type: f.code,
-      where: f.store,
-      detail: (f.evidence ? f.evidence + '  ' : '') + f.message,
-    }));
-    p(table(
-      [
-        { key: 'sev', label: 'SEVERITY', width: 10, raw: true },
-        { key: 'pkg', label: 'PACKAGE', width: W_PKG, color: C.bold },
-        { key: 'type', label: 'TYPE', width: W_TYPE, color: C.cyan },
-        { key: 'where', label: 'WHERE', width: W_WHERE, color: C.dim },
-        { key: 'detail', label: 'DETAIL', width: W_DETAIL, color: C.gray },
-      ],
-      rows,
-    ));
-    if (sorted.length > SHOW) p(`  ${C.gray('... and ' + (sorted.length - SHOW) + ' more (use --json for the full list)')}`);
-    p(`  ${C.gray('use')} ${C.dim('--full')} ${C.gray('for untruncated details and on-disk paths')}`);
+    const FW = term - 13;                                    // width available for wrapped field text
+    /** Print a labelled, word-wrapped field under a finding (label only on the first line). */
+    const field = (key, text, paint) => {
+      if (text == null || text === '') return;
+      wrap(text, FW).forEach((ln, i) => p(`      ${C.gray((i === 0 ? key : '').padEnd(9))} ${paint ? paint(ln) : ln}`));
+    };
+    for (const sev of ORDER) {
+      const group = sorted.filter((f) => f.severity === sev);
+      if (!group.length) continue;
+      p(`  ${SEV_TEXT[sev](C.bold(sev))} ${C.gray('· ' + group.length)}`);
+      p(`  ${C.gray('─'.repeat(term - 2))}`);
+      for (const f of group) {
+        p(`  ${SEV_DOT[sev]} ${C.bold(f.package + '@' + f.version)}   ${C.cyan(f.code)}   ${C.gray('in ' + f.store)}`);
+        field('what', f.message);
+        field('evidence', f.evidence, C.gray);
+        field('why', WHY[f.code], C.gray);
+        field('note', f.note, C.gray);
+        if (f.dir) p(`      ${C.gray('path'.padEnd(9))} ${C.gray(homeShort(f.dir))}`);
+        p('');
+      }
+    }
+    p(`  ${C.gray('use')} ${C.dim('--compact')} ${C.gray('for a one-line-per-finding view, or')} ${C.dim('--json')} ${C.gray('for machine output')}`);
   }
   p('');
 
