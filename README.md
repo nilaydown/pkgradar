@@ -10,7 +10,7 @@ Most "supply-chain" CLIs work by downloading an advisory list and checking wheth
 - **Known worm artifacts** — `setup_bun.sh`, `bun_environment.js`, `migrate-repos.sh`, embedded `.github/workflows/*`, hard-coded Shai-Hulud exfil endpoints, and the rest of the Shai-Hulud / "Mini Shai-Hulud" IOC set.
 - **Obfuscated / packed payloads** — `javascript-obfuscator` `_0x…` fingerprints, `eval`/`new Function` over `atob`/`Buffer.from(base64)`, `child_process` fed from decoded data, giant base64 literals — with the noisy "this file is just minified" signals deliberately demoted so a normal bundled CLI doesn't drown the report.
 - **Manifest oddities** — `bin` entries pointing outside the package or at shell scripts.
-- **(optional) precise advisory matching** — `--online` cross-references [OSV.dev](https://osv.dev) by exact `(name, version)`, so you get real CVE/GHSA IDs, not name collisions.
+- **(optional) precise advisory matching** — `--online` cross-references [OSV.dev](https://osv.dev) by exact `(name, version)`, so you get real CVE/GHSA IDs (not name collisions) — and each advisory is reported at *its own* severity (from the GHSA/CVSS rating), not a blanket level, so a moderate ReDoS in a dev tool doesn't shout as loud as an RCE.
 
 A curated allowlist (`data/allowlist.json`) downgrades benign-but-trippy findings on famous packages (`vercel`, `corepack`, `core-js`, `esbuild`, …) to `INFO` — but it **never** suppresses a hard worm IOC, because "trusted package suddenly ships a worm" is exactly the attack.
 
