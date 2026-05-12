@@ -8,8 +8,21 @@ const PKG = require('../package.json');
 // args
 // ----------------------------------------------------------------------------
 const argv = process.argv.slice(2);
+
+/**
+ * Returns true if the given flag is present in argv.
+ * @param {string} f - Flag string, e.g. "--online".
+ * @returns {boolean}
+ */
 const has = (f) => argv.includes(f);
-const val = (f, d) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : d; };
+
+/**
+ * Returns the value of a flag argument, or a default if absent.
+ * @param {string} f   - Flag string, e.g. "--min-sev".
+ * @param {string} def - Default value when flag is missing or has no argument.
+ * @returns {string}
+ */
+const val = (f, def) => { const i = argv.indexOf(f); return i >= 0 && argv[i + 1] ? argv[i + 1] : def; };
 
 if (has('-h') || has('--help')) {
   process.stdout.write(`pkgradar  -  content-based supply-chain scanner for npm / pnpm / yarn / bun
@@ -49,32 +62,63 @@ const minSev = SEV_FROM_NAME[minSevName] ?? SEV.MEDIUM;
 // colour helpers
 // ----------------------------------------------------------------------------
 const COLOR = process.stdout.isTTY && !process.env.NO_COLOR;
+
+/**
+ * Returns a function that wraps a string in the given ANSI escape code.
+ * Falls back to a no-op when COLOR is disabled.
+ * @param {string} code - ANSI code fragment, e.g. "31" for red.
+ * @returns {(s: string) => string}
+ */
 const paint = (code) => (s) => COLOR ? `\x1b[${code}m${s}\x1b[0m` : `${s}`;
+
 const C = {
   bold: paint('1'), dim: paint('2'), red: paint('31'), grn: paint('32'), ylw: paint('33'),
   blu: paint('34'), mag: paint('35'), cyan: paint('36'), gray: paint('90'),
 };
-// coloured "  CRITICAL  " cell: white-on-colour, fixed width
+
+/**
+ * Returns a fixed-width, coloured severity cell string for use inside a table.
+ * Uses white-on-colour background in TTY mode.
+ * @param {string} sev   - Severity name: "CRITICAL" | "HIGH" | "MEDIUM" | "LOW" | "INFO".
+ * @param {number} width - Total cell width in characters.
+ * @returns {string}
+ */
 function sevCell(sev, width) {
   const bg = { CRITICAL: '41', HIGH: '45', MEDIUM: '43', LOW: '100', INFO: '100' }[sev] || '100';
   const fg = sev === 'MEDIUM' ? '30' : '97';
   const label = sev.padStart((width + sev.length) >> 1).padEnd(width);
   return COLOR ? `\x1b[${bg};${fg};1m${label}\x1b[0m` : label;
 }
+
+/** Maps severity name to a colouring function for plain-text severity mentions. */
 const SEV_TEXT = { CRITICAL: C.red, HIGH: C.mag, MEDIUM: C.ylw, LOW: C.gray, INFO: C.gray };
+
+/**
+ * Replaces the home-directory prefix of a path with "~" for compact display.
+ * @param {string|null} p - Absolute path, or null/undefined.
+ * @returns {string|null}
+ */
 const homeShort = (p) => (p && p.startsWith(os.homedir())) ? '~' + p.slice(os.homedir().length) : p;
 
 // ----------------------------------------------------------------------------
 // foreground spinner (writes to stderr so stdout stays pipe-clean)
 // ----------------------------------------------------------------------------
+
+/**
+ * Creates a TTY spinner that writes to stderr.
+ * @returns {{start: Function, set: Function, stop: Function}}
+ */
 function makeSpinner() {
   const frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
   const on = process.stderr.isTTY && !process.env.NO_COLOR;
   let i = 0, msg = 'starting', timer = null;
   const render = () => process.stderr.write(`\r\x1b[2K${C.cyan(frames[i = (i + 1) % frames.length])} ${C.gray(msg + ' …')}`);
   return {
+    /** Start the spinner interval. */
     start() { if (!on) return; timer = setInterval(render, 80); render(); },
+    /** Update the status message shown next to the spinner. @param {string} m */
     set(m) { msg = m; },
+    /** Stop the spinner and clear the line. */
     stop() { if (timer) clearInterval(timer); if (on) process.stderr.write('\r\x1b[2K'); },
   };
 }
@@ -82,13 +126,28 @@ function makeSpinner() {
 // ----------------------------------------------------------------------------
 // table renderer
 // ----------------------------------------------------------------------------
+
+/**
+ * Clip string s to at most n chars, appending "…" if truncated.
+ * @param {*}      s - Value to stringify and clip.
+ * @param {number} n - Maximum character count.
+ * @returns {string}
+ */
 const clip = (s, n) => { s = String(s == null ? '' : s); return s.length <= n ? s : s.slice(0, Math.max(0, n - 1)) + '…'; };
+
+/**
+ * Pad string s with trailing spaces to exactly n characters.
+ * @param {string} s
+ * @param {number} n
+ * @returns {string}
+ */
 const padTo = (s, n) => s + ' '.repeat(Math.max(0, n - s.length));
 
 /**
  * Render an array of row objects as a box-drawn table.
- * @param {{key:string,label:string,width:number,color?:Function,raw?:boolean}[]} cols
- * @param {object[]} rows
+ * @param {{key:string, label:string, width:number, color?:Function, raw?:boolean}[]} cols - Column definitions.
+ * @param {object[]} rows - Row data objects keyed by col.key.
+ * @returns {string} Rendered table string (no trailing newline).
  */
 function table(cols, rows) {
   const B = COLOR ? C.gray : (s) => s;
@@ -100,7 +159,7 @@ function table(cols, rows) {
   for (const row of rows) {
     const cells = cols.map((c) => {
       const v = clip(row[c.key], c.width);
-      if (c.raw) return ' ' + row[c.key] + ' ';                       // pre-formatted (already padded/coloured)
+      if (c.raw) return ' ' + row[c.key] + ' ';       // pre-formatted (already padded/coloured)
       const txt = padTo(v, c.width);
       return ' ' + (c.color ? c.color(txt) : txt) + ' ';
     });
@@ -113,6 +172,7 @@ function table(cols, rows) {
 // ----------------------------------------------------------------------------
 // main
 // ----------------------------------------------------------------------------
+/** Entry point: parses CLI flags, calls scan(), then renders results to stdout. */
 (async () => {
   const spin = makeSpinner();
   spin.start();
@@ -145,6 +205,8 @@ function table(cols, rows) {
   const counts = { CRITICAL: 0, HIGH: 0, MEDIUM: 0, LOW: 0, INFO: 0 };
   for (const f of res.findings) counts[f.severity]++;
   const worst = ['CRITICAL', 'HIGH', 'MEDIUM', 'LOW', 'INFO'].find((k) => counts[k]) || null;
+
+  // Shorthand to write a line to stdout.
   const p = (...a) => process.stdout.write(a.join(' ') + '\n');
 
   // ---- header ----
@@ -186,7 +248,7 @@ function table(cols, rows) {
     for (const f of sorted) {
       p(`  ${sevCell(f.severity, 10)} ${C.bold(f.package + '@' + f.version)}  ${C.gray(f.store)}  ${C.cyan(f.code)}`);
       p(`     ${f.message}`);
-      if (f.evidence) p(`     ${C.gray('→ ' + f.evidence)}`);
+      if (f.evidence) p(`     ${C.gray('-> ' + f.evidence)}`);
       if (f.note) p(`     ${C.gray('note: ' + f.note)}`);
       if (f.dir) p(`     ${C.gray(homeShort(f.dir))}`);
       p('');

@@ -1,6 +1,6 @@
 {
   "name": "pkgradar",
-  "version": "0.1.2",
+  "version": "0.1.3",
   "description": "Content-based supply-chain scanner for npm/pnpm/yarn/bun: inspects the bytes you actually installed (lifecycle hooks, obfuscated payloads, worm IOCs) instead of just matching package names against an advisory list.",
   "bin": {
     "pkgradar": "bin/pkgradar.js"
